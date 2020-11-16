@@ -65,17 +65,28 @@ fn client(client_port: &String) {
 
 fn server(server_port: &String) {
     let context = zmq::Context::new();
+    let mut isRespBound: bool = false;
 
     let reciever = context.socket(zmq::PULL).unwrap();
     let responder = context.socket(zmq::PUSH).unwrap();
 
     assert!(reciever.bind(server_port).is_ok());
-    assert!(responder.bind("tcp://*:5556").is_ok());
+    match responder.bind("tcp://*:5556") {
+        Ok(_) => {
+            println!("All is connected");
+            isRespBound = true;
+        },
+        Err(e) => {
+            println!("Binding to server address failed: {:?}", e);
+        },
+    }
 
     let mut msg = zmq::Message::new();
     loop {
         reciever.recv(&mut msg, 0).unwrap();
         let message_txt = msg.as_str().unwrap();
-        responder.send(zmq::Message::from(message_txt), 0).unwrap();
+        if (isRespBound) {
+            responder.send(zmq::Message::from(message_txt), 0).unwrap();
+        }
     }
 }
