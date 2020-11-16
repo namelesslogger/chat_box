@@ -34,8 +34,8 @@ fn run() {
 fn client() {
     let context = zmq::Context::new();
 
-    let sender = context.socket(zmq::REQ).unwrap();
-    let reciever = context.socket(zmq::REP).unwrap();
+    let sender = context.socket(zmq::PUSH).unwrap();
+    let reciever = context.socket(zmq::PULL).unwrap();
 
     assert!(sender.connect("tcp://localhost:5555").is_ok());
     assert!(reciever.connect("tcp://localhost:5556").is_ok());
@@ -47,23 +47,24 @@ fn client() {
         stdin().read_line(&mut s).expect("What");   
         
         sender.send(zmq::Message::from(&s), 0).unwrap();
-        sender.recv(&mut zmq::Message::new(), 0).unwrap();
     });
 
     let mut msg = zmq::Message::new();
     loop {
+        let mut pulled_messages: Vec<String> = vec![];
         reciever.recv(&mut msg, 0).unwrap();
         let message_txt = msg.as_str().unwrap();
-        reciever.send("recieved", 0).unwrap();
-        println!("{}", message_txt);
+
+        println!("{}", message_txt)
+        pulled_messages.push(String::from(message_txt));
     }
 }
 
 fn server() {
     let context = zmq::Context::new();
 
-    let reciever = context.socket(zmq::REP).unwrap();
-    let responder = context.socket(zmq::REQ).unwrap();
+    let reciever = context.socket(zmq::PULL).unwrap();
+    let responder = context.socket(zmq::PUSH).unwrap();
 
     assert!(reciever.bind("tcp://*:5555").is_ok());
     assert!(responder.bind("tcp://*:5556").is_ok());
@@ -71,11 +72,7 @@ fn server() {
     let mut msg = zmq::Message::new();
     loop {
         reciever.recv(&mut msg, 0).unwrap();
-        reciever.send("recieved", 0).unwrap();
-        
         let message_txt = msg.as_str().unwrap();
-        
         responder.send(zmq::Message::from(message_txt), 0).unwrap();
-        responder.recv(&mut msg, 0).unwrap();
     }
 }
