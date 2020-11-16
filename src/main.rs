@@ -19,25 +19,30 @@ use unicode_width::UnicodeWidthStr;
 use std::io::prelude::*;
 use std::thread;
 use std::time::Duration;
+use std::env;
 
 fn main() {
-    run();
+    let args: Vec<String> = env::args().collect();
+    run(&args[1]);
 }
 
-fn run() {
-    thread::spawn(||{
-        server();
+fn run(port: &String) {
+    let client_connection = String::from("tcp://localhost:") + port;
+    let server_connection = String::from("tcp://*:") + port;
+
+    thread::spawn(move ||{
+        server(&server_connection);
     });
-    client();
+    client(&client_connection);
 }
 
-fn client() {
+fn client(client_port: &String) {
     let context = zmq::Context::new();
 
     let sender = context.socket(zmq::PUSH).unwrap();
     let reciever = context.socket(zmq::PULL).unwrap();
 
-    assert!(sender.connect("tcp://localhost:5555").is_ok());
+    assert!(sender.connect(client_port).is_ok());
     assert!(reciever.connect("tcp://localhost:5556").is_ok());
     
     // waits for input
@@ -51,22 +56,20 @@ fn client() {
 
     let mut msg = zmq::Message::new();
     loop {
-        let mut pulled_messages: Vec<String> = vec![];
         reciever.recv(&mut msg, 0).unwrap();
         let message_txt = msg.as_str().unwrap();
 
-        println!("{}", message_txt)
-        pulled_messages.push(String::from(message_txt));
+        println!("{}", message_txt);
     }
 }
 
-fn server() {
+fn server(server_port: &String) {
     let context = zmq::Context::new();
 
     let reciever = context.socket(zmq::PULL).unwrap();
     let responder = context.socket(zmq::PUSH).unwrap();
 
-    assert!(reciever.bind("tcp://*:5555").is_ok());
+    assert!(reciever.bind(server_port).is_ok());
     assert!(responder.bind("tcp://*:5556").is_ok());
 
     let mut msg = zmq::Message::new();
