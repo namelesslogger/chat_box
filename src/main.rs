@@ -16,25 +16,25 @@ use std::sync::mpsc::channel;
 use std::thread;
 use std::env;
 use rand::{thread_rng, Rng};
-
-use crypto_box::{Box, PublicKey, SecretKey};
-use rand;
+use crypto_box::{Box, PublicKey, SecretKey, aead::Aead};
 
 
 struct Client {
     public_key: [u8; 32],
-    client_port: u16
+    client_port: u16,
+    username: Vec<u8>,
+    private_key: crypto_box::SecretKey
 }
 
 impl Client {
-    fn client_task(self, username: &str) {
+    fn client_task(self) {
         let client_connection = String::from("tcp://localhost:") + &self.client_port.to_string();
         let context = zmq::Context::new();
         let client = context.socket(zmq::DEALER).unwrap();
         let (tx, rx) = channel::<String>();
 
         client
-            .set_identity(username.as_bytes())
+            .set_identity(&self.username)
             .expect("failed setting client id");
         client
             .connect(&client_connection)
@@ -68,7 +68,8 @@ impl Client {
 }
 
 struct Server {
-    private_key: [u8; 32],
+    //private_key: [u8; 32],
+    //private_key: crypto_box::SecretKey,
     server_port: u16
 }
 
@@ -121,17 +122,18 @@ impl Server {
                 for n in 0..32 {
                     fried_public_key_bytes_array[n] = fried_public_key_bytes[n];
                 }
-                let mut rng = thread_rng();
+
+                /*let mut rng = thread_rng();
                 let nonce = crypto_box::generate_nonce(&mut rng);
                 let fried_public_key = PublicKey::from(fried_public_key_bytes_array);
                 println!("{:?}", fried_public_key);
-                //let my_box = Box::new(&fried_public_key, &my_secret_key);
+                let my_box = Box::new(&fried_public_key, &self.private_key);
     
                 let plaintext = b"Top secret message we're encrypting";
     
-                //let ciphertext = my_box.encrypt(&nonce, &plaintext[..]).unwrap();
+                let ciphertext = my_box.encrypt(&nonce, &plaintext[..]).unwrap();
     
-                //println!("{:?}", ciphertext);
+                println!("{:?}", ciphertext);*/
             } else {
                 println!("User: {}: \n -> {}", identity, message);
             
@@ -179,9 +181,19 @@ fn run(client_port_str: &String, server_port_str: &String, username: &String) {
     let my_public_key_bytes = my_secret_key.public_key().as_bytes().clone();
 
     thread::spawn(move ||{ 
-        let server = Server { server_port: server_port, private_key: my_secret_key.to_bytes() };
+        let server = Server { 
+            server_port: server_port
+        };
+        
         server.server_task(); 
     });
-    let client = Client { client_port: client_port, public_key: my_public_key_bytes };
-    client.client_task(username);
+
+    let client = Client { 
+        client_port: client_port, 
+        public_key: my_public_key_bytes, 
+        username: username.as_bytes().to_vec(),
+        private_key: my_secret_key
+    };
+
+    client.client_task();
 }
