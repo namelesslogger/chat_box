@@ -2,7 +2,13 @@
 mod util;
 use hex;
 use std::{
-    io::{stdout, stdin, Write}};
+    sync::mpsc::channel,
+    thread,
+    env,
+    collections::HashMap,
+    io::{stdout, stdin, Write}
+};
+use rand::{thread_rng, Rng};
 use termion::{event::Key, input::MouseTerminal, raw::IntoRawMode, screen::AlternateScreen};
 use tui::{
     backend::TermionBackend,
@@ -12,10 +18,6 @@ use tui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
     Terminal,
 };
-use std::sync::mpsc::channel;
-use std::thread;
-use std::env;
-use rand::{thread_rng, Rng};
 use crypto_box::{Box, PublicKey, SecretKey, aead::Aead};
 
 
@@ -26,7 +28,27 @@ struct Client {
     private_key: crypto_box::SecretKey
 }
 
+struct Server {
+    server_port: u16
+}
+
 impl Client {
+    /*fn encrypt_message(self, message: &String) -> &str {
+        let mut rng = thread_rng();
+        let nonce = crypto_box::generate_nonce(&mut rng);
+        let fried_public_key = PublicKey::from(fried_public_key_bytes_array);
+        println!("{:?}", fried_public_key);
+        let my_box = Box::new(&fried_public_key, &self.private_key);
+
+        let plaintext = message;
+
+        let ciphertext = my_box.encrypt(&nonce, &plaintext[..]).unwrap();
+
+        println!("{:?}", ciphertext);
+
+        ciphertext
+    }*/
+
     fn client_task(self) {
         let client_connection = String::from("tcp://localhost:") + &self.client_port.to_string();
         let context = zmq::Context::new();
@@ -55,7 +77,7 @@ impl Client {
         loop {
             let request = match rx.try_recv() {
                 Ok(s) => s,
-                Err(e) => String::from("")
+                Err(_e) => String::from("")
             };
             
             if ! request.is_empty() {
@@ -67,12 +89,6 @@ impl Client {
     }
 }
 
-struct Server {
-    //private_key: [u8; 32],
-    //private_key: crypto_box::SecretKey,
-    server_port: u16
-}
-
 impl Server {
     fn server_task(self) {
         let server_connection = String::from("tcp://*:") + &self.server_port.to_string();
@@ -80,7 +96,7 @@ impl Server {
         let frontend = context.socket(zmq::ROUTER).unwrap();
         match frontend.bind(&server_connection) {
             Ok(_) => println!("front end port bound"),
-            Err(e) => {
+            Err(_e) => {
                 println!("Bailing out, port already bound");
             },
         }
@@ -101,7 +117,6 @@ impl Server {
         worker
             .connect("inproc://backend")
             .expect("worker failed to connect to backend");
-        let rng = thread_rng();
         let mut message_counter = 0;
 
         loop {
@@ -116,24 +131,18 @@ impl Server {
     
             if message_counter == 0 {
                 // message
-                let fried_public_key_bytes = hex::decode(message).unwrap();
+                let fried_public_key_bytes = match hex::decode(message) {
+                    Ok(s) => s,
+                    Err(_e) => {
+                        println!("Whoops,invalid hex charatcer encountered..");
+                        Vec::<u8>::new()
+                    },
+                };
     
                 let mut fried_public_key_bytes_array: [u8; 32] = [0; 32];
                 for n in 0..32 {
                     fried_public_key_bytes_array[n] = fried_public_key_bytes[n];
                 }
-
-                /*let mut rng = thread_rng();
-                let nonce = crypto_box::generate_nonce(&mut rng);
-                let fried_public_key = PublicKey::from(fried_public_key_bytes_array);
-                println!("{:?}", fried_public_key);
-                let my_box = Box::new(&fried_public_key, &self.private_key);
-    
-                let plaintext = b"Top secret message we're encrypting";
-    
-                let ciphertext = my_box.encrypt(&nonce, &plaintext[..]).unwrap();
-    
-                println!("{:?}", ciphertext);*/
             } else {
                 println!("User: {}: \n -> {}", identity, message);
             
