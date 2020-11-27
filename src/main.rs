@@ -2,7 +2,7 @@
 mod util;
 use hex;
 use std::{
-    sync::mpsc::channel,
+    sync::mpsc::{SyncSender, Receiver, channel, sync_channel},
     thread,
     env,
     collections::HashMap,
@@ -21,18 +21,20 @@ use tui::{
 use crypto_box::{Box, PublicKey, SecretKey, aead::Aead};
 
 
-struct Client {
+struct ChatSender {
     public_key: [u8; 32],
     client_port: u16,
     username: Vec<u8>,
-    private_key: crypto_box::SecretKey
+    private_key: crypto_box::SecretKey,
+    client_recieve: Receiver<[u8; 32]>
 }
 
-struct Server {
-    server_port: u16
+struct ChatListener {
+    server_port: u16,
+    server_send: SyncSender<[u8; 32]>
 }
 
-impl Client {
+impl ChatSender {
     /*fn encrypt_message(self, message: &String) -> &str {
         let mut rng = thread_rng();
         let nonce = crypto_box::generate_nonce(&mut rng);
@@ -49,7 +51,7 @@ impl Client {
         ciphertext
     }*/
 
-    fn client_task(self) {
+    fn send_task(self) {
         let client_connection = String::from("tcp://localhost:") + &self.client_port.to_string();
         let context = zmq::Context::new();
         let client = context.socket(zmq::DEALER).unwrap();
@@ -66,6 +68,9 @@ impl Client {
             .send(&hex::encode(self.public_key), 0)
             .expect("client failed sending request");
 
+        let friend_public_key = PublicKey::from(self.client_recieve.recv().unwrap());
+        let friend_box = Box::new(&friend_public_key, &self.private_key);
+
         thread::spawn(move || loop { 
             let mut s=String::new();
             let _=stdout().flush();
@@ -81,6 +86,9 @@ impl Client {
             };
             
             if ! request.is_empty() {
+                let mut rng = rand::thread_rng();
+                let nonce = crypto_box::generate_nonce(&mut rng);
+                let ciphertext = friend_box.encrypt(&nonce, &request).unwrap();
                 client
                     .send(&request, 0)
                     .expect("client failed sending request");
@@ -89,8 +97,8 @@ impl Client {
     }
 }
 
-impl Server {
-    fn server_task(self) {
+impl ChatListener {
+    fn listen_task(self) {
         let server_connection = String::from("tcp://*:") + &self.server_port.to_string();
         let context = zmq::Context::new();
         let frontend = context.socket(zmq::ROUTER).unwrap();
@@ -107,12 +115,12 @@ impl Server {
             .expect("server failed binding backend");
         
         let ctx = context.clone();
-        thread::spawn(move || self.server_worker(&ctx));
+        thread::spawn(move || self.listener(&ctx));
         
         zmq::proxy(&frontend, &backend).expect("server failed proxying");
     }
 
-    fn server_worker(self, context: &zmq::Context) {
+    fn listener(self, context: &zmq::Context) {
         let worker = context.socket(zmq::DEALER).unwrap();
         worker
             .connect("inproc://backend")
@@ -143,6 +151,8 @@ impl Server {
                 for n in 0..32 {
                     fried_public_key_bytes_array[n] = fried_public_key_bytes[n];
                 }
+                // pass key to client
+                self.server_send.send(fried_public_key_bytes_array);
             } else {
                 println!("User: {}: \n -> {}", identity, message);
             
@@ -188,21 +198,24 @@ fn run(client_port_str: &String, server_port_str: &String, username: &String) {
     let mut rng = thread_rng();
     let my_secret_key = SecretKey::generate(&mut rng);
     let my_public_key_bytes = my_secret_key.public_key().as_bytes().clone();
+    let (server_send, client_recieve) = sync_channel::<[u8; 32]>(1);
 
     thread::spawn(move ||{ 
-        let server = Server { 
-            server_port: server_port
+        let listen = ChatListener { 
+            server_port: server_port,
+            server_send: server_send
         };
         
-        server.server_task(); 
+        listen.listen_task(); 
     });
 
-    let client = Client { 
+    let chatter = ChatSender { 
         client_port: client_port, 
         public_key: my_public_key_bytes, 
         username: username.as_bytes().to_vec(),
-        private_key: my_secret_key
+        private_key: my_secret_key,
+        client_recieve: client_recieve
     };
 
-    client.client_task();
+    chatter.send_task();
 }
