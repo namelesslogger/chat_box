@@ -86,9 +86,6 @@ impl ChatSender {
             };
             
             if ! request.is_empty() {
-                let mut rng = rand::thread_rng();
-                let nonce = crypto_box::generate_nonce(&mut rng);
-                let ciphertext = friend_box.encrypt(&nonce, &request).unwrap();
                 client
                     .send(&request, 0)
                     .expect("client failed sending request");
