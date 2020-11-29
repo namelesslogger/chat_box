@@ -35,22 +35,6 @@ struct ChatListener {
 }
 
 impl ChatSender {
-    /*fn encrypt_message(self, message: &String) -> &str {
-        let mut rng = thread_rng();
-        let nonce = crypto_box::generate_nonce(&mut rng);
-        let fried_public_key = PublicKey::from(fried_public_key_bytes_array);
-        println!("{:?}", fried_public_key);
-        let my_box = Box::new(&fried_public_key, &self.private_key);
-
-        let plaintext = message;
-
-        let ciphertext = my_box.encrypt(&nonce, &plaintext[..]).unwrap();
-
-        println!("{:?}", ciphertext);
-
-        ciphertext
-    }*/
-
     fn send_task(self) {
         let client_connection = String::from("tcp://localhost:") + &self.client_port.to_string();
         let context = zmq::Context::new();
@@ -86,8 +70,11 @@ impl ChatSender {
             };
             
             if ! request.is_empty() {
+                let mut rng = rand::thread_rng();
+                let nonce = crypto_box::generate_nonce(&mut rng);
+                let ciphertext = friend_box.encrypt(&nonce, request.as_bytes()).unwrap();
                 client
-                    .send(&request, 0)
+                    .send(&hex::encode(ciphertext), 0)
                     .expect("client failed sending request");
             }   
         }
@@ -139,7 +126,7 @@ impl ChatListener {
                 let fried_public_key_bytes = match hex::decode(message) {
                     Ok(s) => s,
                     Err(_e) => {
-                        println!("Whoops,invalid hex charatcer encountered..");
+                        println!("Whoops,invalid hex character encountered..");
                         Vec::<u8>::new()
                     },
                 };
@@ -151,7 +138,7 @@ impl ChatListener {
                 // pass key to client
                 self.server_send.send(fried_public_key_bytes_array);
             } else {
-                println!("User: {}: \n -> {}", identity, message);
+                println!("User: {}: \n -> {:?}", identity, message);
             
                 worker
                     .send(&identity, zmq::SNDMORE)
