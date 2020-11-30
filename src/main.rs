@@ -2,7 +2,7 @@
 mod util;
 use hex;
 use std::{
-    sync::mpsc::{SyncSender, Receiver, channel, sync_channel},
+    sync::mpsc::{SyncSender, Sender, Receiver, channel, sync_channel},
     thread,
     env,
     collections::HashMap,
@@ -26,12 +26,14 @@ struct ChatSender {
     client_port: u16,
     username: Vec<u8>,
     private_key: crypto_box::SecretKey,
-    client_recieve: Receiver<[u8; 32]>
+    client_key: Receiver<[u8; 32]>,
+    client_message: Receiver<[String; 2]> 
 }
 
 struct ChatListener {
     server_port: u16,
-    server_send: SyncSender<[u8; 32]>
+    server_key: SyncSender<[u8; 32]>,
+    server_message: Sender<[String; 2]>
 }
 
 impl ChatSender {
@@ -52,8 +54,10 @@ impl ChatSender {
             .send(&hex::encode(self.public_key), 0)
             .expect("client failed sending request");
 
-        let friend_public_key = PublicKey::from(self.client_recieve.recv().unwrap());
+        println!("Waiting for a friend...");
+        let friend_public_key = PublicKey::from(self.client_key.recv().unwrap());
         let friend_box = Box::new(&friend_public_key, &self.private_key);
+        println!("WAHEY!!!!");
 
         thread::spawn(move || loop { 
             let mut s=String::new();
@@ -63,20 +67,38 @@ impl ChatSender {
             tx.send(s).unwrap();
         });
 
+        let mut rng = rand::thread_rng();
+        let nonce = crypto_box::generate_nonce(&mut rng);
+                
         loop {
-            let request = match rx.try_recv() {
-                Ok(s) => s,
-                Err(_e) => String::from("")
+            let message = match self.client_message.try_recv() {
+                Ok(s) => {
+                    let message_bytes = match hex::decode(s[1].clone()) {
+                        Ok(s) => s,
+                        Err(_e) => {
+                            println!("Whoops,invalid hex character encountered..");
+                            Vec::<u8>::new()
+                        },
+                    };
+                    let decrypted_plaintext = friend_box.decrypt(&nonce, &message_bytes[..]).unwrap();
+                    println!("{:?}", decrypted_plaintext);
+                    
+                }, 
+                Err(_e) => {}
             };
             
-            if ! request.is_empty() {
-                let mut rng = rand::thread_rng();
-                let nonce = crypto_box::generate_nonce(&mut rng);
-                let ciphertext = friend_box.encrypt(&nonce, request.as_bytes()).unwrap();
-                client
-                    .send(&hex::encode(ciphertext), 0)
-                    .expect("client failed sending request");
-            }   
+            
+            let request = match rx.try_recv() {
+                Ok(send) => {
+                    if ! send.is_empty() {
+                        let ciphertext = friend_box.encrypt(&nonce, send.as_bytes()).unwrap();
+                        client
+                            .send(&hex::encode(ciphertext), 0)
+                            .expect("client failed sending request");
+                    }   
+                },
+                Err(_e) => {}
+            };
         }
     }
 }
@@ -122,30 +144,21 @@ impl ChatListener {
                 .unwrap();
     
             if message_counter == 0 {
-                // message
-                let fried_public_key_bytes = match hex::decode(message) {
-                    Ok(s) => s,
+                match hex::decode(message) {
+                    Ok(message_bytes) => {
+                        let mut fried_public_key_bytes_array: [u8; 32] = [0; 32];
+                        for n in 0..32 {
+                            fried_public_key_bytes_array[n] = message_bytes[n];
+                        }
+                        // pass key to client
+                        self.server_key.send(fried_public_key_bytes_array).unwrap();
+                    },
                     Err(_e) => {
                         println!("Whoops,invalid hex character encountered..");
-                        Vec::<u8>::new()
                     },
                 };
-    
-                let mut fried_public_key_bytes_array: [u8; 32] = [0; 32];
-                for n in 0..32 {
-                    fried_public_key_bytes_array[n] = fried_public_key_bytes[n];
-                }
-                // pass key to client
-                self.server_send.send(fried_public_key_bytes_array);
             } else {
-                println!("User: {}: \n -> {:?}", identity, message);
-            
-                worker
-                    .send(&identity, zmq::SNDMORE)
-                    .expect("worker failed sending identity");
-                worker
-                    .send(&message, 0)
-                    .expect("worker failed sending message");
+                self.server_message.send([String::from(identity), String::from(message)]).unwrap();
             }
             message_counter += 1;
         } 
@@ -182,12 +195,14 @@ fn run(client_port_str: &String, server_port_str: &String, username: &String) {
     let mut rng = thread_rng();
     let my_secret_key = SecretKey::generate(&mut rng);
     let my_public_key_bytes = my_secret_key.public_key().as_bytes().clone();
-    let (server_send, client_recieve) = sync_channel::<[u8; 32]>(1);
+    let (server_key, client_key) = sync_channel::<[u8; 32]>(1);
+    let (server_message, client_message) = channel::<[String; 2]>();
 
     thread::spawn(move ||{ 
         let listen = ChatListener { 
             server_port: server_port,
-            server_send: server_send
+            server_key: server_key,
+            server_message: server_message
         };
         
         listen.listen_task(); 
@@ -198,7 +213,8 @@ fn run(client_port_str: &String, server_port_str: &String, username: &String) {
         public_key: my_public_key_bytes, 
         username: username.as_bytes().to_vec(),
         private_key: my_secret_key,
-        client_recieve: client_recieve
+        client_key: client_key,
+        client_message: client_message
     };
 
     chatter.send_task();
